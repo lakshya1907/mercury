@@ -354,7 +354,12 @@ class LaneCostmapNode(Node):
         # ── Sample rows in the ROI ────────────────────────────────────────
         step = max(1, roi_h // max(1, self._sample_rows))
 
-        for y_roi in range(roi_h - 1, roi_h // 3, -step):
+        # At 1m height, lane lines are in top 50% of ROI (farther ground)
+        # Bottom 50% is near ground right beside robot
+        roi_sample_end   = int(roi_h * 0.5)   # stop halfway down
+        roi_sample_start = 0                    # start from top of ROI
+
+        for y_roi in range(roi_sample_start, roi_sample_end, step):
             y_full = float(y_roi + roi_y)
 
             # Compute boundary x-coordinates at this row

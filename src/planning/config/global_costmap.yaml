@@ -7,7 +7,7 @@ global_costmap:
 
       update_frequency: 3.0
       publish_frequency: 2.0
-      resolution: 0.05
+      resolution: 0.10
 
       rolling_window: true
       width: 70
@@ -53,12 +53,12 @@ global_costmap:
           raytrace_min_range: 0.0
           raytrace_max_range: 10.0
           obstacle_min_range: 0.15
-          obstacle_max_range: 8.0
+          obstacle_max_range: 10.0
           observation_persistence: 2.0
           inf_is_valid: True
 
       # ── Inflation layer ───────────────────────────────────────────────────
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.35
+        inflation_radius: 0.45
         cost_scaling_factor: 2.5

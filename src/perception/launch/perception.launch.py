@@ -21,38 +21,30 @@ def generate_launch_description():
             'image_topic':           '/camera/image_raw',
             'show_debug':            True,
 
-            'roi_top_frac':          0.35,
-            'white_v_min':           170,
-            'white_s_max':           60,
-            'close_kw':              5,
-            'close_kh':              25,
-            'canny_low':             30.0,
-            'canny_high':            100.0,
-            'hough_threshold':       15,
-            'hough_min_len':         20.0,
-            'hough_max_gap':         40.0,
+            'roi_top_frac':          0.25,   # as set before
+
+            # ── THESE ARE THE BROKEN ONES ──────────────────────────────
+            # Sim at 1m+steeper pitch renders lane markings darker
+            # Drop threshold significantly
+            'white_v_min':           160,    # was 170 — too strict now
+            'white_s_max':           60,     # was 60  — slightly more permissive
+
+            # Also loosen the morphological close to catch thinner marks
+            'close_kw':              7,      # was 5
+            'close_kh':              30,     # was 25
+
+            # Loosen Hough — fewer bright pixels means fewer edge points
+            'hough_threshold':       10,     # was 15
+            'hough_min_len':         15.0,   # was 20.0
+            'hough_max_gap':         50.0,   # was 40.0
+            # ────────────────────────────────────────────────────────────
+
             'min_slope_abs':         0.2,
             'max_slope_abs':         4.0,
-
-            # ── KEY TUNING PARAMS ───────────────────────────────────────────
-            # Half the real lane width in pixels.
-            # HOW TO MEASURE: pause sim, look at a [both] frame where both
-            # white lane lines are clearly visible, read L:xxx and R:xxx from
-            # the debug overlay. lane_half_width_px = (R - L) / 2.
-            # Start with 160 for a 640px image.
             'lane_half_width_px':    160.0,
-
-            # Auto-cal OFF — red obstacles were registering as white and
-            # corrupting the calibrated lane width (was showing cal=1077px).
             'use_auto_cal':          False,
-
-            # Reject [both] detections where sep > this as obstacle-polluted.
-            # = lane_half_width_px * 2 * 1.4  →  160*2*1.4 = 448 ≈ 450
             'max_valid_sep_px':      450.0,
-
-            # Fragment threshold
             'min_lane_sep_px':       120.0,
-
             'ema_alpha':             0.30,
             'drift_gain':            0.8,
         }]
@@ -81,8 +73,8 @@ def generate_launch_description():
             # ── Detection tuning ─────────────────────────────────────────
             'roi_top_frac':  0.35,     # ignore top 35% (sky, far distance)
             'sample_rows':   8,        # rows to project per frame
-            'white_v_min':   170,      # HSV value threshold for white lanes
-            'white_s_max':   60,       # HSV saturation threshold
+            'white_v_min':   130,   # was 170
+            'white_s_max':   80,    # was 60      # HSV saturation threshold
 
             # ── Projection extent ─────────────────────────────────────────
             # Pixels projected outside each boundary → marked lethal (100).

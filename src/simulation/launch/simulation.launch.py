@@ -57,7 +57,10 @@ def generate_launch_description():
             package='ros_gz_sim',
             executable='create',
             arguments=[
-                '-topic', 'robot_description'
+                '-topic', 'robot_description',
+                # '-x', '25.5',
+                # '-y', '-18.5',
+                # '-Y', '-1.57',
             ],
             parameters=[{'use_sim_time': True}],
             output='screen'
