@@ -5,60 +5,70 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
 
-      update_frequency: 3.0
-      publish_frequency: 2.0
-      resolution: 0.05
+      update_frequency: 2.0
+      publish_frequency: 1.0
 
-      rolling_window: true
-      width: 70
-      height: 70
+      rolling_window: false
 
-      track_unknown_space: true
+      # Fixed size — matches lane/pothole costmap publishers exactly.
+      # DO NOT add a static_layer for /map (SLAM) here — SLAM publishes
+      # at 0.05m resolution which conflicts with our 0.10m costmaps and
+      # causes the costmap to oscillate between sizes, aborting all goals.
+      # SLAM is used for LOCALIZATION only (EKF + slam_toolbox).
+      # Navigable space is defined by lane_layer (road boundaries).
+      width:      70
+      height:     70
+      resolution: 0.10
+      origin_x:  -35.0
+      origin_y:  -35.0
 
-      footprint: "[[0.25, 0.24], [0.25, -0.24], [-0.25, -0.24], [-0.25, 0.24]]"
-      footprint_padding: 0.05
+      footprint: "[[0.25, 0.20], [0.25, -0.20], [-0.25, -0.20], [-0.25, 0.20]]"
+      footprint_padding: 0.02
 
-      # ─────────────────────────────────────────────────────────────────────
-      # STEP 1 (current): Run WITHOUT lane_layer to verify Nav2 works fine.
-      #         plugins: ["obstacle_layer", "inflation_layer"]
-      #
-      # STEP 2 (after STEP 1 works): Re-enable lane_layer:
-      #         plugins: ["lane_layer", "obstacle_layer", "inflation_layer"]
-      #         and uncomment the lane_layer block below.
-      # ─────────────────────────────────────────────────────────────────────
-      plugins: ["lane_layer", "obstacle_layer", "inflation_layer"]
+      plugins:
+        - lane_layer
+        - pothole_layer
+        - obstacle_layer
+        - inflation_layer
 
-      # ── Lane boundary layer (DISABLED — uncomment for STEP 2) ────────────
+      # Lane boundary lethal cells — keeps robot inside the track.
+      # Published by lane_costmap_node at 700×700 @ 0.10m.
       lane_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: True
         map_topic: /perception/road_costmap
-        subscribe_to_updates: true
-        enabled: true
-        map_subscribe_transient_local: true
-        unknown_cost_value: -1
-        lethal_cost_threshold: 100
+        map_subscribe_transient_local: True
+        subscribe_to_updates: False
 
-      # ── LiDAR obstacle layer ─────────────────────────────────────────────
+      # Pothole lethal circles — persistent, grows as robot explores track.
+      # Published by pothole_costmap_node at 700×700 @ 0.10m.
+      pothole_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: True
+        map_topic: /perception/pothole_costmap
+        map_subscribe_transient_local: True
+        subscribe_to_updates: False
+
+      # LiDAR obstacles (drums, walls, people) — global marking.
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
         observation_sources: scan
         scan:
           topic: /scan
+          sensor_frame: lidar_link
           data_type: LaserScan
           max_obstacle_height: 2.0
           min_obstacle_height: 0.05
+          obstacle_min_range: 0.2
+          obstacle_max_range: 8.0
           clearing: True
           marking: True
-          raytrace_min_range: 0.0
-          raytrace_max_range: 10.0
-          obstacle_min_range: 0.15
-          obstacle_max_range: 8.0
-          observation_persistence: 2.0
+          raytrace_min_range: 0.10
+          raytrace_max_range: 8.5
           inf_is_valid: True
 
-      # ── Inflation layer ───────────────────────────────────────────────────
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.35
+        inflation_radius: 0.45
         cost_scaling_factor: 2.5
