@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>face_task</name>
+  <version>0.0.0</version>
+  <description>
+    WP-2 face detection pipeline for Mercury UGVC.
+    Contains four nodes:
+      face_recognition_node   - InsightFace camera inference
+      face_task_node          - 18-position scan state machine
+      turret_controller_node  - serial bridge to Arduino/ESP32
+      face_task_trigger_node  - WP-2 GPS trigger, starts face task
+    Completely independent of the perception package.
+  </description>
+  <maintainer email="dev@todo.todo">dev</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>cv_bridge</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
