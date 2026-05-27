@@ -6,3 +6,4 @@ log/
 frames_*
 .vscode/
 digest*.txt
+.antigravitycli
