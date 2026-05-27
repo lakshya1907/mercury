@@ -7,6 +7,7 @@ global_costmap:
 
       update_frequency: 2.0
       publish_frequency: 1.0
+      transform_tolerance: 0.5      # ← add this
 
       rolling_window: false
 
@@ -47,7 +48,7 @@ global_costmap:
         enabled: True
         map_topic: /perception/pothole_costmap
         map_subscribe_transient_local: True
-        subscribe_to_updates: False
+        subscribe_to_updates: True
 
       # LiDAR obstacles (drums, walls, people) — global marking.
       obstacle_layer:
@@ -70,5 +71,5 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.45
-        cost_scaling_factor: 2.5
+        inflation_radius: 0.6
+        cost_scaling_factor: 0.5z #0.5

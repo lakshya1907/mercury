@@ -235,7 +235,7 @@ class PotholeCostmapNode(Node):
 
         # Mild morphological close — fills small holes inside pothole blob
         k    = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+        # mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
 
         # ── Find contours ─────────────────────────────────────────────────────
         contours, _ = cv2.findContours(
@@ -425,6 +425,13 @@ class PotholeCostmapNode(Node):
             # Clamp + add inflation pad
             r_final = float(np.clip(r_estimated, self._min_r, self._max_r))
             r_final += self._inflation_pad
+
+            # ── Skip if already marked ────────────────────────────────────────
+            cx_cell = int((cx_m - self._origin_x) / self._res)
+            cy_cell = int((cy_m - self._origin_y) / self._res)
+            if (0 <= cx_cell < self._grid_w and 0 <= cy_cell < self._grid_h
+                    and self._grid[cy_cell * self._grid_w + cx_cell] == 100):
+                continue
 
             # ── Mark on persistent grid ───────────────────────────────────────
             cells_marked = self._mark_circle(cx_m, cy_m, r_final)
