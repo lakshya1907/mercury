@@ -24,6 +24,8 @@ Parameters:
   arrival_radius      (float)        — metres — distance to count as "reached"
   status_interval     (float)        — seconds between /waypoint_status publishes
   odom_topic          (str)          — which odometry topic to subscribe to
+  spawn_x             (float)        — world X of the robot spawn point (metres)
+  spawn_y             (float)        — world Y of the robot spawn point (metres)
 """
 
 import json
@@ -99,6 +101,8 @@ class WaypointDetectorNode(Node):
         self.declare_parameter('arrival_radius', DEFAULT_ARRIVAL_RADIUS)
         self.declare_parameter('status_interval', DEFAULT_STATUS_INTERVAL)
         self.declare_parameter('odom_topic', '/diff_drive_controller/odom')
+        self.declare_parameter('spawn_x', 0.0)   # world-frame X at spawn
+        self.declare_parameter('spawn_y', 0.0)   # world-frame Y at spawn
 
         waypoints_flat: list[float] = (
             self.get_parameter('waypoints').get_parameter_value().double_array_value
@@ -115,6 +119,12 @@ class WaypointDetectorNode(Node):
         )
         odom_topic: str = (
             self.get_parameter('odom_topic').get_parameter_value().string_value
+        )
+        self._spawn_x: float = (
+            self.get_parameter('spawn_x').get_parameter_value().double_value
+        )
+        self._spawn_y: float = (
+            self.get_parameter('spawn_y').get_parameter_value().double_value
         )
 
         # ── Build waypoint objects ────────────────────────────────────────────
@@ -135,14 +145,18 @@ class WaypointDetectorNode(Node):
             f'[WaypointDetector] Loaded {len(self._waypoints)} waypoints '
             f'with arrival_radius={radius}m'
         )
+        self.get_logger().info(
+            f'[WaypointDetector] Spawn offset: ({self._spawn_x:.2f}, {self._spawn_y:.2f}) — '
+            f'waypoints are in world coordinates'
+        )
         for wp in self._waypoints:
             self.get_logger().info(
                 f'  {wp.name}: ({wp.x:.2f}, {wp.y:.2f})'
             )
 
-        # ── Robot pose ────────────────────────────────────────────────────────
-        self._robot_x: float = 0.0
-        self._robot_y: float = 0.0
+        # ── Robot pose (initialised to spawn position, not 0,0) ───────────────
+        self._robot_x: float = self._spawn_x
+        self._robot_y: float = self._spawn_y
         self._pose_received = False
 
         # ── Publishers ────────────────────────────────────────────────────────
@@ -170,8 +184,11 @@ class WaypointDetectorNode(Node):
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _odom_cb(self, msg: 'Odometry') -> None:
-        self._robot_x = msg.pose.pose.position.x
-        self._robot_y = msg.pose.pose.position.y
+        # Odometry is relative to where the robot started (always 0,0 at boot).
+        # Adding the spawn offset converts it to world/Gazebo coordinates so
+        # that waypoints can be specified in world-frame directly.
+        self._robot_x = self._spawn_x + msg.pose.pose.position.x
+        self._robot_y = self._spawn_y + msg.pose.pose.position.y
         self._pose_received = True
 
     def _detection_callback(self) -> None:

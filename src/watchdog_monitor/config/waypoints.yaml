@@ -1,22 +1,9 @@
 waypoint_detector_node:
   ros__parameters:
-    # Flat list of [x1, y1, x2, y2, x3, y3, ...] in the map/odom frame.
-    # These defaults match the UGVC sim track roughly.
-    # Adjust to your actual map coordinates.
-    waypoints:
-      - 2.0   # WP-1 x
-      - 0.0   # WP-1 y
-      - 2.0   # WP-2 x
-      - 4.0   # WP-2 y
-      - 0.0   # WP-3 x
-      - 4.0   # WP-3 y
-
-    waypoint_names:
-      - "WP-1"
-      - "WP-2"
-      - "WP-3"
-
-    # Robot must be within this distance (metres) to trigger detection
+    spawn_x: -21.0
+    spawn_y: -47.0
+    waypoints: [-19.0, -47.0,  -15.0, -47.0,  -21.0, -43.0]  # real world coords
+    waypoint_names: ["WP-1", "WP-2", "WP-3"]
     arrival_radius: 0.5
 
     # How often to publish /waypoint_status (seconds)

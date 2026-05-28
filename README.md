@@ -1,22 +1,20 @@
-# mercury  
+# mercury
 
-Official repository for **ICMTC UGVC-2026**
-
----
+Official repository for ICMTC UGVC-2026
 
 ## Prerequisites
 
-- Ubuntu 22.04 / 24.04  
-- ROS 2 Jazzy  
-- colcon  
-- rosdep  
-- Docker (optional)
+* Ubuntu 24.04
+* ROS 2 Jazzy
+* colcon
+* rosdep
+* Docker (optional)
 
 ---
 
 ## First-Time Setup (Fresh Clone)
 
-> This repository is already a ROS 2 workspace (contains `src/`)
+This repository is already a ROS 2 workspace.
 
 ```bash
 # Clone workspace
@@ -35,7 +33,36 @@ colcon build
 
 # Source workspace
 source install/setup.bash
+
 ```
+
+---
+
+## Python Virtual Environment Setup
+
+Some packages (e.g. face recognition) require Python dependencies that must be installed in a virtual environment alongside ROS 2.
+
+```bash
+# Create venv — allow access to ROS 2 system packages
+python3 -m venv ~/mercury_venv --system-site-packages
+
+# Activate
+source ~/mercury_venv/bin/activate
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+```
+
+Add activation to your `~/.bashrc` so it persists across terminals:
+
+```bash
+echo "source ~/mercury_venv/bin/activate" >> ~/.bashrc
+source ~/.bashrc
+
+```
+
+> **Note:** Always activate the venv before running any face task or perception nodes. The `--system-site-packages` flag ensures ROS 2 Python packages (`rclpy`, etc.) remain accessible inside the venv.
 
 ---
 
@@ -55,12 +82,17 @@ export GZ_SIM_RESOURCE_PATH=$(ros2 pkg prefix simulation)/share/simulation/model
 
 # Gazebo system plugins
 export GZ_SIM_SYSTEM_PLUGIN_PATH=/opt/ros/jazzy/lib
+
+# Python venv
+source ~/mercury_venv/bin/activate
+
 ```
 
 Apply:
 
 ```bash
 source ~/.bashrc
+
 ```
 
 ---
@@ -70,6 +102,7 @@ source ~/.bashrc
 ```bash
 sudo docker compose build
 sudo docker compose run ros
+
 ```
 
 ---
@@ -79,64 +112,46 @@ sudo docker compose run ros
 ```bash
 cd mercury
 source install/setup.bash
-
+colcon build
 ros2 launch bringup bringup_sim.launch.py
+
 ```
 
 ---
 
-# watchdog_monitor
+## watchdog_monitor
 
-A non-intrusive ROS 2 monitoring and observability package for the Mercury robot.
-Runs alongside the existing stack without modifying control logic.
+A non-intrusive ROS 2 monitoring and observability package for the Mercury robot. Runs alongside the existing stack without modifying control logic.
 
----
+### Nodes
 
-## Nodes
+| Node | Publishes | Rate | Description |
+| --- | --- | --- | --- |
+| `system_monitor_node` | `/system_status` | 2s | Tracks running vs expected nodes and publishes JSON health |
+| `watchdog_node` | `/system_alerts` | 3s | Detects node crashes, topic silence, TF failures |
+| `waypoint_detector_node` | `/waypoint_reached`, `/waypoint_status` | 10Hz / 1Hz | Detects arrival at predefined waypoints |
+| `control_listener_node` | — | Event-driven | Passive observer logging monitoring events |
+| `monitoring_dashboard` | — | 1Hz | Live terminal dashboard |
 
-| Node                     | Publishes                               | Rate         | Description                                                |
-| ------------------------ | --------------------------------------- | ------------ | ---------------------------------------------------------- |
-| `system_monitor_node`    | `/system_status`                        | 2s           | Tracks running vs expected nodes and publishes JSON health |
-| `watchdog_node`          | `/system_alerts`                        | 3s           | Detects node crashes, topic silence, TF failures           |
-| `waypoint_detector_node` | `/waypoint_reached`, `/waypoint_status` | 10Hz / 1Hz   | Detects arrival at predefined waypoints                    |
-| `control_listener_node`  | —                                       | Event-driven | Passive observer logging monitoring events                 |
-| `monitoring_dashboard`   | —                                       | 1Hz          | Live terminal dashboard                                    |
+### Launching the Watchdog
 
----
-
-## Quick Start
+To build and launch the watchdog monitoring system:
 
 ```bash
-colcon build --packages-select watchdog_monitor
-source install/setup.bash
 
 ros2 launch watchdog_monitor monitoring_all.launch.py
-ros2 launch watchdog_monitor dashboard.launch.py
+
 ```
 
----
+### Dashboard
 
-## Launch Arguments
-
-| Argument           | Default                       | Description                          |
-| ------------------ | ----------------------------- | ------------------------------------ |
-| `monitor_interval` | `2.0`                         | Node health check interval (seconds) |
-| `topic_timeout`    | `5.0`                         | Topic silence threshold (seconds)    |
-| `arrival_radius`   | `0.5`                         | Waypoint detection radius (meters)   |
-| `odom_topic`       | `/diff_drive_controller/odom` | Odometry source topic                |
-
----
-
-## Turret Control
-
-To manually move the turret, publish commands to the controller:
+To spin up the live terminal dashboard:
 
 ```bash
-ros2 topic pub /turret_controller/commands std_msgs/msg/Float64MultiArray "{data: [1.0, 0.0]}"
-```
 
-- The array represents joint commands (e.g., yaw, pitch).
-- Adjust values based on your turret configuration.
+ros2 launch watchdog_monitor dashboard.launch.py
+
+```
 
 ---
 
@@ -147,60 +162,90 @@ Edit `config/waypoints.yaml`:
 ```yaml
 waypoint_detector_node:
   ros__parameters:
-    waypoints: [2.0, 0.0, 2.0, 4.0, 0.0, 4.0]
+    spawn_x: -21.0
+    spawn_y: -47.0
+    waypoints: [-19.0, -47.0, -19.0, -43.0, -21.0, -43.0]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
     arrival_radius: 0.5
+
 ```
+
+> **Note:** `spawn_x` and `spawn_y` must match the `-x` / `-y` values passed to `ros_gz_sim create` in the launch file. Waypoints are specified in world coordinates — the node offsets odometry by the spawn position automatically.
+
+---
+
+## Face Detection Task
+
+> **Prerequisite:** `monitoring_all` must be running before launching the face task. It provides the waypoint and system monitoring events that the face task node depends on.
+
+**Terminal 1 — start monitoring stack:**
+
+```bash
+ros2 launch watchdog_monitor monitoring_all.launch.py
+
+```
+
+**Terminal 2 — launch face detection:**
+
+```bash
+ros2 launch face_task face_task.launch.py target_image:=/home/soap/probes/mercury/photo1.jpg
+
+```
+
+*Replace the `target_image` path with the absolute path to your target face image.*
 
 ---
 
 ## Topics
 
-| Topic               | Type                     | Publisher                |
-| ------------------- | ------------------------ | ------------------------ |
-| `/system_status`    | `std_msgs/String` (JSON) | `system_monitor_node`    |
-| `/system_alerts`    | `std_msgs/String` (JSON) | `watchdog_node`          |
+| Topic | Type | Publisher |
+| --- | --- | --- |
+| `/system_status` | `std_msgs/String` (JSON) | `system_monitor_node` |
+| `/system_alerts` | `std_msgs/String` (JSON) | `watchdog_node` |
 | `/waypoint_reached` | `std_msgs/String` (JSON) | `waypoint_detector_node` |
-| `/waypoint_status`  | `std_msgs/String` (JSON) | `waypoint_detector_node` |
+| `/waypoint_status` | `std_msgs/String` (JSON) | `waypoint_detector_node` |
 
 ---
 
 ## Sending Navigation Goal
 
 ```bash
-ros2 topic pub --once /goal_decomposer/goal geometry_msgs/msg/PoseStamped \ 
+ros2 topic pub --once /goal_decomposer/goal geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: p, y: q}}}"
+
 ```
 
-- update coordinate assignment by replacing (p, q) with the target UGV destination coordinates.
+*Replace `(p, q)` with the target world coordinates.*
 
 ---
 
-## Troubleshooting
+## Turret Control
 
-### Package not found
-
-```bash
-source install/setup.bash
-```
-
-### Dependencies missing
+To manually move the turret, publish commands to the controller:
 
 ```bash
-rosdep install --from-paths src --ignore-src -r -y
+ros2 topic pub /turret_controller/commands std_msgs/msg/Float64MultiArray "{data: [1.0, 0.0]}"
+
 ```
 
-### Gazebo models not loading
-
-```bash
-echo $GZ_SIM_RESOURCE_PATH
-```
+*The array represents joint commands (e.g., yaw, pitch). Adjust values based on your turret configuration.*
 
 ---
 
-## Clean Build
+## Manually Trigger a Waypoint Event
+
+```bash
+ros2 topic pub --once /waypoint_reached std_msgs/msg/String \
+  '{"data": "{\"event\": \"waypoint_reached\", \"waypoint\": {\"name\": \"WP-2\", \"index\": 2}}"}'
+
+```
+
+--- 
+
+### Clean Build
 
 ```bash
 rm -rf build/ install/ log/
 colcon build
+
 ```
