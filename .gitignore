@@ -1,9 +1,8 @@
-build/
-install/
 log/
-*.pdf
-*.gv
 frames_*
 .vscode/
 digest*.txt
+.antigravitycli
 venv/
+build/
+install/
