@@ -57,8 +57,8 @@ class FaceTaskNode(Node):
         super().__init__('face_task_node')
 
         # ── Parameters ────────────────────────────────────────────────────────
-        self.declare_parameter('h_positions_deg',   [-75.0, -45.0, -15.0, 15.0, 45.0, 75.0])
-        self.declare_parameter('v_positions_deg',   [40.0, 25.0, 59.0])   # mid, low, high
+        self.declare_parameter('h_positions_deg',   [-135.0, -90.0, -45.0, 0.0, 45.0,  90.0, 135.0])
+        self.declare_parameter('v_positions_deg',   [59.0, 40.0, 25.0])   # high, mid, low
         self.declare_parameter('settle_time_sec',   0.5)
         self.declare_parameter('fine_tune_px_tol',  20.0)
         self.declare_parameter('fine_tune_gain_h',  0.05)
@@ -82,13 +82,16 @@ class FaceTaskNode(Node):
         # ── Build 18-position scan grid ────────────────────────────────────────
         # Order: V[0](mid) full H sweep → V[1](low) full H sweep → V[2](high) full H sweep
         self._grid = []
-        for v in self._v_pos:
-            for h in self._h_pos:
-                self._grid.append((h, v))
-        self.get_logger().info(
-            f'Scan grid: {len(self._grid)} positions | '
-            f'H={self._h_pos} | V={self._v_pos}')
 
+        for row_idx, v in enumerate(self._v_pos):
+
+            if row_idx % 2 == 0:
+                h_scan = self._h_pos
+            else:
+                h_scan = list(reversed(self._h_pos))
+
+            for h in h_scan:
+                self._grid.append((h, v))
         # ── State ─────────────────────────────────────────────────────────────
         self._state          = IDLE
         self._grid_idx       = 0
@@ -120,7 +123,7 @@ class FaceTaskNode(Node):
     # ── Callbacks ─────────────────────────────────────────────────────────────
     def _start_cb(self, msg: Bool):
         if msg.data and self._state == IDLE:
-            self.get_logger().info('Task START received. Beginning 18-image grid scan.')
+            self.get_logger().info('Task START received. Beginning 21-image grid scan.')
             self._reset_scan()
             self._state = SCANNING
 
@@ -155,7 +158,7 @@ class FaceTaskNode(Node):
     # ── SCANNING phase ────────────────────────────────────────────────────────
     def _run_scanning(self):
         """
-        Step through the 18-position grid one position at a time.
+        Step through the 21-position grid one position at a time.
         For each position:
           1. Command turret to (H, V)
           2. Wait settle_time
@@ -168,11 +171,11 @@ class FaceTaskNode(Node):
         # BUT apply a per-position timeout so a silent recognition node
         # (e.g. no target embedding loaded) cannot stall the entire scan.
         if self._waiting_result:
-            capture_timeout = self._settle + 2.0   # settle + 2 s grace
+            capture_timeout = self._settle + 0.7   # settle + 2 s grace
             if hasattr(self, '_capture_sent_t') and \
                     time.time() - self._capture_sent_t > capture_timeout:
                 self.get_logger().warn(
-                    f'[{self._grid_idx+1:02d}/18] No response from face_recognition_node '
+                    f'[{self._grid_idx+1:02d}/21] No response from face_recognition_node '
                     f'after {capture_timeout:.1f}s — treating as no-match and advancing.')
                 self._waiting_result = False
                 self._match_found    = False
@@ -182,7 +185,7 @@ class FaceTaskNode(Node):
         # All positions exhausted without finding target
         if self._grid_idx >= len(self._grid):
             self.get_logger().warn(
-                'Scan complete — target NOT found in all 18 positions. '
+                'Scan complete — target NOT found in all 21 positions. '
                 'Publishing task complete (no match).')
             self._pub_complete.publish(Bool(data=False))
             self._state = DONE
@@ -202,7 +205,7 @@ class FaceTaskNode(Node):
             self._scan_substep = 1
             self._scan_step_t  = time.time()
             self.get_logger().info(
-                f'[{self._grid_idx+1:02d}/18] Moving turret → H={h_deg}° V={v_deg}°')
+                f'[{self._grid_idx+1:02d}/21] Moving turret → H={h_deg}° V={v_deg}°')
 
         elif self._scan_substep == 1:
             # Wait for settle
@@ -221,7 +224,7 @@ class FaceTaskNode(Node):
             # Result arrived (_waiting_result cleared by _match_cb)
             if self._match_found:
                 self.get_logger().info(
-                    f'TARGET FOUND at grid position [{self._grid_idx+1}/18] '
+                    f'TARGET FOUND at grid position [{self._grid_idx+1}/21] '
                     f'H={h_deg}° V={v_deg}°. Transitioning to FINE_TUNE.')
                 self._state        = FINE_TUNE
                 self._ft_start     = time.time()
@@ -271,7 +274,7 @@ class FaceTaskNode(Node):
         new_v = current_v + self._gain_v * self._v_err
 
         # Clamp to safe range
-        new_h = max(-90.0, min(90.0, new_h))
+        new_h = max(-135.0, min(135.0, new_h))
         new_v = max(0.0,   min(120.0, new_v))
 
         self._move_turret(new_h, new_v)
