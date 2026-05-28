@@ -28,6 +28,7 @@ source /opt/ros/jazzy/setup.bash
 
 # Install dependencies
 rosdep install --from-paths src --ignore-src -r -y
+pip install opencv-python numpy psutil --break-system-packages
 
 # Build workspace
 colcon build
