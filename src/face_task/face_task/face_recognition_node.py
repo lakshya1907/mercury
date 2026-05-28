@@ -172,7 +172,7 @@ class FaceRecognitionNode(Node):
       
 
         if matched:
-            save_path = "/home/lakshya-jindal/mercury/best_match.jpg"
+            save_path = os.path.join(os.path.expanduser('~'), 'mercury', 'best_match.jpg')
             
             # Draw bounding box on best face
             x1, y1, x2, y2 = map(int, best_face.bbox)

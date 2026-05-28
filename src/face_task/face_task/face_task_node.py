@@ -2,46 +2,51 @@
 """
 face_task_node.py
 =================
-Brain node for Plan 3 face recognition task.
+Brain node for the face recognition task.
 
 State machine:
     IDLE        -- waiting for /face_task/start
-    SCANNING    -- iterating through 18 (H×V) turret positions, capturing + recognising
+    SCANNING    -- iterating through 21 (H×V) turret positions, capturing + recognising
     FINE_TUNE   -- proportional controller to centre face in frame
     FIRE        -- activate laser, wait, publish done
     DONE        -- publish /face_task/complete, return to IDLE
 
+Joint / angle convention (matches URDF and fixed turret_gazebo_bridge):
+    pan_deg  :  0 = straight forward (+X)
+                positive = LEFT  (CCW from above, matches Z-up axis)
+                range    : [-170, +170] deg
+    tilt_deg :  0 = level (horizontal)
+                positive = UP
+                negative = DOWN
+                range    : [-80, +80] deg
+
+Scan grid  (7 pan × 3 tilt = 21 positions):
+    pan  (deg): [-120, -80, -40, 0, 40, 80, 120]   — covers ±120° sweep
+    tilt (deg): [+20, 0, -20]                        — high / level / low
+
+    The face photos in mercury.sdf are at z=1.5m, robot base ~z=0.21m,
+    turret ~z=0.26m above base → photos are ~1.24m above turret at ~50m
+    distance → elevation angle ≈ atan(1.24/50) ≈ 1.4°.
+    So tilt=0 (level) is the critical row.  ±20° gives comfortable margin.
+
 Subscribes:
     /face_task/start           (std_msgs/Bool)   -- True starts the task
     /face/match_found          (std_msgs/Bool)
-    /face/horizontal_error     (std_msgs/Float32)
-    /face/vertical_error       (std_msgs/Float32)
+    /face/horizontal_error     (std_msgs/Float32) -- pixels, + = face right of centre
+    /face/vertical_error       (std_msgs/Float32) -- pixels, + = face below centre
 
 Publishes:
-    /face/capture_request      (std_msgs/Bool)   -- trigger vision node
-    /turret/pan_deg            (std_msgs/Float32) -- horizontal servo target (degrees)
-    /turret/tilt_deg           (std_msgs/Float32) -- vertical servo target (degrees)
+    /face/capture_request      (std_msgs/Bool)
+    /turret/pan_deg            (std_msgs/Float32)  -- degrees, 0=forward, +=left
+    /turret/tilt_deg           (std_msgs/Float32)  -- degrees, 0=level,  +=up
     /laser/fire                (std_msgs/Bool)
-    /face_task/complete        (std_msgs/Bool)   -- True when task finished
-
-Parameters (all tunable at launch):
-    h_positions_deg   list of 6 horizontal angles  default: [-75,-45,-15,15,45,75]
-    v_positions_deg   list of 3 vertical angles    default: [40,25,59]  (mid,low,high)
-    settle_time_sec   turret settle delay           default: 0.5
-    fine_tune_px_tol  pixel tolerance for fine-tune default: 20.0
-    fine_tune_gain_h  proportional gain horizontal  default: 0.05 (deg/px)
-    fine_tune_gain_v  proportional gain vertical    default: 0.05 (deg/px)
-    fine_tune_timeout timeout for fine-tune phase   default: 5.0
-    laser_on_time_sec laser fire duration           default: 3.0
-    pan_centre_deg    servo centre for pan          default: 90.0
-    tilt_centre_deg   servo centre for tilt         default: 90.0
+    /face_task/complete        (std_msgs/Bool)
 """
 
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32
 import time
-
 
 # ── State constants ────────────────────────────────────────────────────────────
 IDLE       = 'IDLE'
@@ -57,41 +62,44 @@ class FaceTaskNode(Node):
         super().__init__('face_task_node')
 
         # ── Parameters ────────────────────────────────────────────────────────
-        self.declare_parameter('h_positions_deg',   [-135.0, -90.0, -45.0, 0.0, 45.0,  90.0, 135.0])
-        self.declare_parameter('v_positions_deg',   [59.0, 40.0, 25.0])   # high, mid, low
-        self.declare_parameter('settle_time_sec',   0.5)
+        # Pan angles: 0=forward, sweep ±120° in 40° steps
+        self.declare_parameter('h_positions_deg',
+                               [-120.0, -80.0, -40.0, 0.0, 40.0, 80.0, 120.0])
+        # Tilt angles: 0=level; photos at ~50m are nearly level so centre row is key
+        self.declare_parameter('v_positions_deg',  [20.0, 0.0, -20.0])
+        self.declare_parameter('settle_time_sec',   0.6)
         self.declare_parameter('fine_tune_px_tol',  20.0)
+        # deg/px gain: image ~640px wide, FOV ~60° → ~0.094°/px; 0.05 is conservative
         self.declare_parameter('fine_tune_gain_h',  0.05)
         self.declare_parameter('fine_tune_gain_v',  0.05)
         self.declare_parameter('fine_tune_timeout', 5.0)
         self.declare_parameter('laser_on_time_sec', 3.0)
-        self.declare_parameter('pan_centre_deg',    90.0)
-        self.declare_parameter('tilt_centre_deg',   90.0)
 
-        self._h_pos      = self.get_parameter('h_positions_deg').value
-        self._v_pos      = self.get_parameter('v_positions_deg').value
+        self._h_pos      = list(self.get_parameter('h_positions_deg').value)
+        self._v_pos      = list(self.get_parameter('v_positions_deg').value)
         self._settle     = self.get_parameter('settle_time_sec').value
         self._tol        = self.get_parameter('fine_tune_px_tol').value
         self._gain_h     = self.get_parameter('fine_tune_gain_h').value
         self._gain_v     = self.get_parameter('fine_tune_gain_v').value
         self._ft_timeout = self.get_parameter('fine_tune_timeout').value
         self._laser_time = self.get_parameter('laser_on_time_sec').value
-        self._pan_ctr    = self.get_parameter('pan_centre_deg').value
-        self._tilt_ctr   = self.get_parameter('tilt_centre_deg').value
 
-        # ── Build 18-position scan grid ────────────────────────────────────────
-        # Order: V[0](mid) full H sweep → V[1](low) full H sweep → V[2](high) full H sweep
+        # ── Build 21-position scan grid (boustrophedon / snake pattern) ───────
+        # Row 0 (tilt high):  pan L→R
+        # Row 1 (tilt level): pan R→L
+        # Row 2 (tilt low):   pan L→R
         self._grid = []
+        for row_idx, tilt in enumerate(self._v_pos):
+            pan_row = self._h_pos if row_idx % 2 == 0 else list(reversed(self._h_pos))
+            for pan in pan_row:
+                self._grid.append((pan, tilt))
 
-        for row_idx, v in enumerate(self._v_pos):
+        self.get_logger().info(
+            f'Scan grid: {len(self._grid)} positions | '
+            f'pan={self._h_pos} | tilt={self._v_pos}')
+        self.get_logger().info(
+            'Convention: pan 0=forward +=left, tilt 0=level +=up')
 
-            if row_idx % 2 == 0:
-                h_scan = self._h_pos
-            else:
-                h_scan = list(reversed(self._h_pos))
-
-            for h in h_scan:
-                self._grid.append((h, v))
         # ── State ─────────────────────────────────────────────────────────────
         self._state          = IDLE
         self._grid_idx       = 0
@@ -102,11 +110,15 @@ class FaceTaskNode(Node):
         self._ft_start       = None
         self._fire_start     = None
 
+        # Track current turret position for fine-tune adjustments
+        self._cur_pan  = 0.0
+        self._cur_tilt = 0.0
+
         # ── Subscribers ───────────────────────────────────────────────────────
-        self.create_subscription(Bool,    '/face_task/start',        self._start_cb, 10)
-        self.create_subscription(Bool,    '/face/match_found',       self._match_cb, 10)
-        self.create_subscription(Float32, '/face/horizontal_error',  self._herr_cb,  10)
-        self.create_subscription(Float32, '/face/vertical_error',    self._verr_cb,  10)
+        self.create_subscription(Bool,    '/face_task/start',       self._start_cb, 10)
+        self.create_subscription(Bool,    '/face/match_found',      self._match_cb, 10)
+        self.create_subscription(Float32, '/face/horizontal_error', self._herr_cb,  10)
+        self.create_subscription(Float32, '/face/vertical_error',   self._verr_cb,  10)
 
         # ── Publishers ────────────────────────────────────────────────────────
         self._pub_capture  = self.create_publisher(Bool,    '/face/capture_request', 10)
@@ -115,15 +127,18 @@ class FaceTaskNode(Node):
         self._pub_laser    = self.create_publisher(Bool,    '/laser/fire',           10)
         self._pub_complete = self.create_publisher(Bool,    '/face_task/complete',   10)
 
-        # ── Main control loop at 10 Hz ─────────────────────────────────────────
-        self._loop_timer = self.create_timer(0.1, self._loop)
+        # Park turret at home on start (forward, level)
+        self._move_turret(0.0, 0.0)
 
+        # ── Main loop at 10 Hz ────────────────────────────────────────────────
+        self._loop_timer = self.create_timer(0.1, self._loop)
         self.get_logger().info('FaceTaskNode ready. Waiting for /face_task/start ...')
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
+
     def _start_cb(self, msg: Bool):
         if msg.data and self._state == IDLE:
-            self.get_logger().info('Task START received. Beginning 21-image grid scan.')
+            self.get_logger().info('Task START received. Beginning grid scan.')
             self._reset_scan()
             self._state = SCANNING
 
@@ -139,114 +154,85 @@ class FaceTaskNode(Node):
         self._v_err = msg.data
 
     # ── Main loop ─────────────────────────────────────────────────────────────
+
     def _loop(self):
         if self._state == IDLE:
             return
-
         elif self._state == SCANNING:
             self._run_scanning()
-
         elif self._state == FINE_TUNE:
             self._run_fine_tune()
-
         elif self._state == FIRE:
             self._run_fire()
+        # DONE: do nothing
 
-        elif self._state == DONE:
-            pass  # stay here until reset
+    # ── SCANNING ──────────────────────────────────────────────────────────────
 
-    # ── SCANNING phase ────────────────────────────────────────────────────────
     def _run_scanning(self):
-        """
-        Step through the 21-position grid one position at a time.
-        For each position:
-          1. Command turret to (H, V)
-          2. Wait settle_time
-          3. Trigger capture
-          4. Wait for match result
-          5. If match → transition to FINE_TUNE
-          6. Else → advance to next position
-        """
-        # If we're waiting for vision node to respond, do nothing —
-        # BUT apply a per-position timeout so a silent recognition node
-        # (e.g. no target embedding loaded) cannot stall the entire scan.
+        # Timeout guard: if recognition node doesn't reply, move on
         if self._waiting_result:
-            capture_timeout = self._settle + 0.7   # settle + 2 s grace
+            capture_timeout = self._settle + 1.0
             if hasattr(self, '_capture_sent_t') and \
                     time.time() - self._capture_sent_t > capture_timeout:
                 self.get_logger().warn(
-                    f'[{self._grid_idx+1:02d}/21] No response from face_recognition_node '
-                    f'after {capture_timeout:.1f}s — treating as no-match and advancing.')
+                    f'[{self._grid_idx+1:02d}/{len(self._grid)}] No response — '
+                    f'treating as no-match and advancing.')
                 self._waiting_result = False
                 self._match_found    = False
             else:
                 return
 
-        # All positions exhausted without finding target
         if self._grid_idx >= len(self._grid):
             self.get_logger().warn(
-                'Scan complete — target NOT found in all 21 positions. '
-                'Publishing task complete (no match).')
+                'Scan complete — target NOT found. Publishing complete (no match).')
             self._pub_complete.publish(Bool(data=False))
             self._state = DONE
             return
 
-        h_deg, v_deg = self._grid[self._grid_idx]
+        pan_deg, tilt_deg = self._grid[self._grid_idx]
 
-        # ── Substep tracking via a small internal sub-state ────────────────
-        # We use _scan_substep: 0=move, 1=settling, 2=capture, 3=wait_result
         if not hasattr(self, '_scan_substep'):
-            self._scan_substep  = 0
-            self._scan_step_t   = None
+            self._scan_substep = 0
+            self._scan_step_t  = None
 
         if self._scan_substep == 0:
-            # Command turret
-            self._move_turret(h_deg, v_deg)
+            self._move_turret(pan_deg, tilt_deg)
             self._scan_substep = 1
             self._scan_step_t  = time.time()
             self.get_logger().info(
-                f'[{self._grid_idx+1:02d}/21] Moving turret → H={h_deg}° V={v_deg}°')
+                f'[{self._grid_idx+1:02d}/{len(self._grid)}] '
+                f'pan={pan_deg:+.0f}°  tilt={tilt_deg:+.0f}°')
 
         elif self._scan_substep == 1:
-            # Wait for settle
             if time.time() - self._scan_step_t >= self._settle:
                 self._scan_substep = 2
 
         elif self._scan_substep == 2:
-            # Trigger capture + recognition
-            self._waiting_result  = True
-            self._match_found     = False
-            self._capture_sent_t  = time.time()   # for per-position timeout
+            self._waiting_result = True
+            self._match_found    = False
+            self._capture_sent_t = time.time()
             self._pub_capture.publish(Bool(data=True))
             self._scan_substep = 3
 
         elif self._scan_substep == 3:
-            # Result arrived (_waiting_result cleared by _match_cb)
             if self._match_found:
                 self.get_logger().info(
-                    f'TARGET FOUND at grid position [{self._grid_idx+1}/21] '
-                    f'H={h_deg}° V={v_deg}°. Transitioning to FINE_TUNE.')
+                    f'TARGET FOUND at [{self._grid_idx+1}/{len(self._grid)}] '
+                    f'pan={pan_deg:+.0f}° tilt={tilt_deg:+.0f}°. → FINE_TUNE')
                 self._state        = FINE_TUNE
                 self._ft_start     = time.time()
                 self._scan_substep = 0
             else:
-                # Advance to next position
                 self._grid_idx    += 1
                 self._scan_substep = 0
 
-    # ── FINE_TUNE phase ───────────────────────────────────────────────────────
+    # ── FINE_TUNE ─────────────────────────────────────────────────────────────
+
     def _run_fine_tune(self):
-        """
-        Proportional controller: adjust turret until face is centred
-        within ±_tol pixels on both axes.
-        Timeout after _ft_timeout seconds → fire anyway.
-        """
         elapsed = time.time() - self._ft_start
 
-        # Trigger a fresh capture every 0.2s to get updated pixel errors
         if not hasattr(self, '_ft_last_capture'):
             self._ft_last_capture = 0.0
-
         if time.time() - self._ft_last_capture >= 0.2:
             self._pub_capture.publish(Bool(data=True))
             self._ft_last_capture = time.time()
@@ -259,7 +245,6 @@ class FaceTaskNode(Node):
             self.get_logger().info(
                 f'Fine-tune complete ({reason}). '
                 f'h_err={self._h_err:.1f}px v_err={self._v_err:.1f}px')
-            # Clean up
             if hasattr(self, '_ft_last_capture'):
                 del self._ft_last_capture
             self._state      = FIRE
@@ -267,21 +252,20 @@ class FaceTaskNode(Node):
             return
 
         # Proportional correction
-        # h_err > 0 → face is right → increase pan (positive direction)
-        # v_err > 0 → face is below → increase tilt
-        current_h, current_v = self._grid[self._grid_idx]
-        new_h = current_h + self._gain_h * self._h_err
-        new_v = current_v + self._gain_v * self._v_err
+        # h_err > 0 → face is RIGHT of centre → pan RIGHT → decrease pan
+        # (pan positive = left, so right correction = subtract)
+        # v_err > 0 → face is BELOW centre   → tilt DOWN  → decrease tilt
+        new_pan  = self._cur_pan  - self._gain_h * self._h_err
+        new_tilt = self._cur_tilt - self._gain_v * self._v_err
 
         # Clamp to safe range
-        new_h = max(-135.0, min(135.0, new_h))
-        new_v = max(0.0,   min(120.0, new_v))
+        new_pan  = max(-170.0, min(170.0, new_pan))
+        new_tilt = max(-80.0,  min(80.0,  new_tilt))
+        self._move_turret(new_pan, new_tilt)
 
-        self._move_turret(new_h, new_v)
+    # ── FIRE ──────────────────────────────────────────────────────────────────
 
-    # ── FIRE phase ────────────────────────────────────────────────────────────
     def _run_fire(self):
-        """Fire laser for laser_on_time_sec, then publish complete."""
         if time.time() - self._fire_start < self._laser_time:
             self._pub_laser.publish(Bool(data=True))
         else:
@@ -291,17 +275,20 @@ class FaceTaskNode(Node):
             self._state = DONE
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
     def _move_turret(self, pan_deg: float, tilt_deg: float):
-        """Publish turret position commands."""
-        # Convert from scan angles to servo angles
-        # pan_centre_deg is the servo neutral (facing forward)
-        servo_pan  = self._pan_ctr  + pan_deg   # add offset from centre
-        servo_tilt = self._tilt_ctr + tilt_deg  # add offset from centre
-        self._pub_pan.publish(Float32(data=float(servo_pan)))
-        self._pub_tilt.publish(Float32(data=float(servo_tilt)))
+        """
+        Publish turret position in robot-frame degrees.
+        pan_deg : 0=forward, +=left, -=right
+        tilt_deg: 0=level,   +=up,   -=down
+        turret_gazebo_bridge converts these directly to radians (no offset).
+        """
+        self._cur_pan  = pan_deg
+        self._cur_tilt = tilt_deg
+        self._pub_pan.publish(Float32(data=float(pan_deg)))
+        self._pub_tilt.publish(Float32(data=float(tilt_deg)))
 
     def _reset_scan(self):
-        """Reset state for a fresh scan."""
         self._grid_idx       = 0
         self._waiting_result = False
         self._match_found    = False
@@ -309,10 +296,11 @@ class FaceTaskNode(Node):
         self._v_err          = 0.0
         self._ft_start       = None
         self._fire_start     = None
-        if hasattr(self, '_scan_substep'):
-            del self._scan_substep
-        if hasattr(self, '_ft_last_capture'):
-            del self._ft_last_capture
+        self._cur_pan        = 0.0
+        self._cur_tilt       = 0.0
+        for attr in ('_scan_substep', '_ft_last_capture', '_capture_sent_t'):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
 
 def main(args=None):
