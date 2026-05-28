@@ -134,17 +134,17 @@ def generate_launch_description():
             'white_s_max':            80,
             'blob_min_area':         400,
             'blob_min_circularity':  0.40,
-            'blob_max_aspect':       2.2,
+            'blob_max_aspect':       3.3,
             # World-space pothole size
             'min_pothole_r':         0.20,
-            'max_pothole_r':         1.20,
-            'inflation_pad':         0.15,
+            'max_pothole_r':         1.0,
+            'inflation_pad':         0.0,
             'radius_samples':        12,
             # Performance
             'publish_rate':          2.0,
             'process_every_n':       5,
             # Projection safety
-            'max_proj_m':            4.5,
+            'max_proj_m':            4.99,
             'min_proj_m':            0.3,
             'forward_only':          True,
         }]
@@ -155,5 +155,5 @@ def generate_launch_description():
         lane_detection_node,
         lane_costmap,
         lane_assist,
-        pothole_costmap,   # ← new
+        pothole_costmap, 
     ])
