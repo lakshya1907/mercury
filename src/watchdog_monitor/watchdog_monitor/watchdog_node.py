@@ -85,16 +85,17 @@ class WatchdogNode(Node):
         self.declare_parameter('topic_timeout', 5.0)
         self.declare_parameter('critical_nodes', [
             '/robot_state_publisher',
+
             '/ekf_filter_node',
             '/slam_toolbox',
-            '/lifecycle_manager_localization',
+
             '/planner_server',
             '/controller_server',
             '/bt_navigator',
-            '/behavior_server',
-            '/lifecycle_manager_navigation',
+
+            '/controller_manager',
             '/diff_drive_controller',
-            '/joint_state_broadcaster',
+
             '/lane_costmap',
         ])
         self.declare_parameter('tf_pairs', [
