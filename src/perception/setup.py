@@ -14,6 +14,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
         glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config'),
+        glob('config/*.json')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -35,6 +37,8 @@ setup(
             'lane_costmap = perception.lane_costmap_node:main',
             'lane_assist_node = perception.lane_assist_node:main',
             'pothole_costmap = perception.pothole_costmap_node:main',
+            'carrot_goal = perception.carrot_goal_node:main',
+            'lane_bev_carrot = perception.lane_bev_carrot_node:main',
         ],
     },
 )

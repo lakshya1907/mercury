@@ -443,31 +443,24 @@ class LaneCostmapNode(Node):
                 m, b = right_fit
                 rx = float(np.clip((y_roi - b) / m, 0.0, fw - 1.0))
 
+            # mark walls lethal
             if lx is not None:
-                step_px = max(1, self._lethal_px // 4)
-                for du in range(0, self._lethal_px, step_px):
-                    cell = self._project(lx - du, y_full, cam_pos, R_cam,
-                                         robot_pos, robot_fwd)
-                    if cell:
-                        self._mark(cell[0], cell[1], 100)
-                for du in range(4, 16, 4):
-                    cell = self._project(lx + du, y_full, cam_pos, R_cam,
-                                         robot_pos, robot_fwd)
-                    if cell:
-                        self._mark(cell[0], cell[1], 0)
+                for du in range(0, self._lethal_px, 4):
+                    cell = self._project(lx - du, y_full, cam_pos, R_cam, robot_pos, robot_fwd)
+                    if cell: self._mark(cell[0], cell[1], 100)
 
             if rx is not None:
-                step_px = max(1, self._lethal_px // 4)
-                for du in range(0, self._lethal_px, step_px):
-                    cell = self._project(rx + du, y_full, cam_pos, R_cam,
-                                         robot_pos, robot_fwd)
-                    if cell:
-                        self._mark(cell[0], cell[1], 100)
-                for du in range(4, 16, 4):
-                    cell = self._project(rx - du, y_full, cam_pos, R_cam,
-                                         robot_pos, robot_fwd)
-                    if cell:
-                        self._mark(cell[0], cell[1], 0)
+                for du in range(0, self._lethal_px, 4):
+                    cell = self._project(rx + du, y_full, cam_pos, R_cam, robot_pos, robot_fwd)
+                    if cell: self._mark(cell[0], cell[1], 100)
+
+            # mark ENTIRE inside as free
+            inner_lx = (lx + self._lethal_px) if lx is not None else max(0.0, rx - 400.0) if rx is not None else 0.0
+            inner_rx = (rx - self._lethal_px) if rx is not None else min(float(fw), lx + 400.0) if lx is not None else float(fw)
+
+            for u in np.arange(inner_lx, inner_rx, 8.0):
+                cell = self._project(u, y_full, cam_pos, R_cam, robot_pos, robot_fwd)
+                if cell: self._mark(cell[0], cell[1], 0)
 
     # ═══════════════════════════════════════════════════════════════════
     # Publish (with lethal-cell decay)

@@ -11,6 +11,8 @@ global_costmap:
 
       rolling_window: false
 
+      # unknown_cost_value: 100
+
       # Fixed size — matches lane/pothole costmap publishers exactly.
       # DO NOT add a static_layer for /map (SLAM) here — SLAM publishes
       # at 0.05m resolution which conflicts with our 0.10m costmaps and
