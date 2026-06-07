@@ -98,20 +98,21 @@ def generate_launch_description():
         name='lane_bev_carrot',
         output='screen',
         parameters=[{
-    'use_sim_time':          True,
-    'carrot_dist_m':         2.0,
-    'goal_tolerance':        0.8,
-    'publish_rate':          5.0,
-    'camera_hfov':           1.047,
-    'image_width':           640,
-    'image_height':          480,
-    'min_proj_m':            0.3,
-    'max_proj_m':            6.0,
-    'n_bev_samples':         50,
-    'fit_cache_sec':         1.0,   # ← NEW
-    'no_carrot_stop_streak': 3,     # ← NEW (lower = stops faster)
-    'safe_cost_max': 70,   # rejects inflation zone too (recommended)
-}]
+            'use_sim_time':          True,
+            'carrot_dist_m':         2.0,
+            'goal_tolerance':        0.8,
+            'publish_rate':          2.0,
+            'camera_hfov':           1.047,
+            'image_width':           640,
+            'image_height':          480,
+            'min_proj_m':            0.3,
+            'max_proj_m':            6.0,
+            'n_bev_samples':         50,
+            'fit_cache_sec':         1.0,
+            'no_carrot_stop_streak': 3,
+            'safe_cost_max': 50,
+            'safety_radius':         0.30,  # NEW — footprint half-width + margin
+        }]
     )
 
    

@@ -49,10 +49,10 @@ class LaneBevCarrotNode(Node):
         self.declare_parameter('n_bev_samples',           50)
         self.declare_parameter('fit_cache_sec',           1.0)
         self.declare_parameter('no_carrot_stop_streak',   3)
-        # lane costmap: reject if cost >= this (100=lethal only, 50=+ inflation)
         self.declare_parameter('safe_cost_max',           50)
-        # scan: reject carrot if any lidar hit is within this distance (metres)
         self.declare_parameter('min_clear_m',             0.6)
+        self.declare_parameter('safety_radius', 0.30)
+
 
         p = lambda n: self.get_parameter(n).value
         self._carrot_dist     = float(p('carrot_dist_m'))
@@ -68,6 +68,7 @@ class LaneBevCarrotNode(Node):
         self._stop_max        = int(p('no_carrot_stop_streak'))
         self._safe_cost_max   = int(p('safe_cost_max'))
         self._min_clear_m     = float(p('min_clear_m'))
+        self._safety_r        = float(p('safety_radius'))   # ← add here
 
         self._fx = (img_w/2.0)/math.tan(hfov/2.0)
         self._cx = img_w/2.0
@@ -184,14 +185,18 @@ class LaneBevCarrotNode(Node):
         return int(self._road_grid[row * info.width + col])
 
     def _is_safe(self, wx, wy) -> bool:
-        # 1. Lane boundary check (road costmap)
-        c = self._road_cost(wx, wy)
-        if c != -1 and c >= self._safe_cost_max:
-            return False
-        # 2. Real-time LiDAR obstacle check
+        check_pts = [(wx, wy)]
+        for deg in (0, 90, 180, 270, 45, 135, 225, 315):
+            a = math.radians(deg)
+            check_pts.append((wx + self._safety_r * math.cos(a),
+                            wy + self._safety_r * math.sin(a)))
+        for px, py in check_pts:
+            c = self._road_cost(px, py)
+            if c != -1 and c >= self._safe_cost_max:
+                return False
         if self._scan_pts_map is not None and len(self._scan_pts_map) > 0:
-            dists = np.hypot(self._scan_pts_map[:,0]-wx,
-                             self._scan_pts_map[:,1]-wy)
+            dists = np.hypot(self._scan_pts_map[:, 0] - wx,
+                            self._scan_pts_map[:, 1] - wy)
             if np.any(dists < self._min_clear_m):
                 return False
         return True
