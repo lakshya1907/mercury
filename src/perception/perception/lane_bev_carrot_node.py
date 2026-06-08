@@ -1,12 +1,26 @@
 """
-lane_bev_carrot_node.py  v4
+lane_bev_carrot_node.py  v5
 ---------------------------
-Safety: TWO independent obstacle checks per candidate:
-  1. road_costmap  (/perception/road_costmap, map frame, 5Hz)
-     → rejects candidates outside lane boundaries (cost >= safe_cost_max)
+CHANGELOG vs v4
+---------------
+* Removed _publish_stop() — it published robot odom coords with frame_id='map',
+  causing nav goals to land at wrong map positions (the "random ass" destinations
+  visible in logs as 17.x goals when robot is at 23.x).
+
+* Added _fallback_carrot(fwd) — when BEV lane fit finds no safe carrot, sweeps
+  a grid of points directly ahead at varying distances and lateral offsets,
+  returning the first that passes _is_safe().
+
+* Added _straight_ahead_carrot(dist) — unconditional last resort: place the
+  carrot dist metres ahead along the robot's current heading.  No safety check.
+  This guarantees the robot always has somewhere to go and never stops dead.
+
+* _tick() fallback chain:
+    BEV lane fit carrot  →  lateral sweep fallback  →  straight-ahead crawl
+
+Safety: TWO independent obstacle checks per candidate (unchanged from v4):
+  1. road_costmap  (/perception/road_costmap, map frame, 5 Hz)
   2. LaserScan     (/scan, real-time)
-     → rejects candidates within min_clear_m of any scan hit
-     → no costmap lag, no unknown-cell loophole
 """
 
 import math, json, os
@@ -48,12 +62,18 @@ class LaneBevCarrotNode(Node):
         self.declare_parameter('max_proj_m',              6.0)
         self.declare_parameter('n_bev_samples',           50)
         self.declare_parameter('fit_cache_sec',           1.0)
-        self.declare_parameter('no_carrot_stop_streak',   3)
+        self.declare_parameter('no_carrot_stop_streak',   3)   # kept for logging only
         self.declare_parameter('safe_cost_max',           50)
         self.declare_parameter('min_clear_m',             0.6)
-        self.declare_parameter('safety_radius', 0.30)
-        self.declare_parameter('max_carrot_dist_m', 4.0)
+        self.declare_parameter('safety_radius',           0.30)
+        self.declare_parameter('max_carrot_dist_m',       4.0)
 
+        # ── NEW: fallback parameters ───────────────────────────────────────────
+        # Lateral sweep: distances and offsets tried when BEV carrot fails
+        self.declare_parameter('fallback_dists_m',    [1.0, 0.75, 1.5])
+        self.declare_parameter('fallback_laterals_m', [0.0, -0.3, 0.3, -0.6, 0.6])
+        # Straight-ahead crawl distance when even lateral sweep fails
+        self.declare_parameter('straight_ahead_dist_m', 0.75)
 
         p = lambda n: self.get_parameter(n).value
         self._carrot_dist     = float(p('carrot_dist_m'))
@@ -69,9 +89,12 @@ class LaneBevCarrotNode(Node):
         self._stop_max        = int(p('no_carrot_stop_streak'))
         self._safe_cost_max   = int(p('safe_cost_max'))
         self._min_clear_m     = float(p('min_clear_m'))
-        self._safety_r        = float(p('safety_radius'))   # ← add here
+        self._safety_r        = float(p('safety_radius'))
         self._max_carrot_dist = float(p('max_carrot_dist_m'))
-        
+
+        self._fallback_dists    = list(p('fallback_dists_m'))
+        self._fallback_laterals = list(p('fallback_laterals_m'))
+        self._straight_dist     = float(p('straight_ahead_dist_m'))
 
         self._fx = (img_w/2.0)/math.tan(hfov/2.0)
         self._cx = img_w/2.0
@@ -82,8 +105,6 @@ class LaneBevCarrotNode(Node):
         bev  = _load('bev_config.json')
         road = _load('road_config.json')
         sw   = _load('sliding_window_config.json')
-
-        
 
         src = np.float32(bev['src_points'])
         dst = np.float32(bev['dst_points'])
@@ -109,11 +130,11 @@ class LaneBevCarrotNode(Node):
         self._last_fit_stamp  = None
         self._streak          = 0
 
-        # road costmap (map frame, lane boundaries)
+        # road costmap
         self._road_grid = None
         self._road_info = None
 
-        # laser scan points in map frame (Nx2 numpy array or None)
+        # laser scan points in map frame
         self._scan_pts_map: np.ndarray | None = None
 
         self._tf_buf = tf2_ros.Buffer()
@@ -137,13 +158,15 @@ class LaneBevCarrotNode(Node):
         self._pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
         self.create_timer(1.0/rate, self._tick)
         self.get_logger().info(
-            f'LaneBevCarrotNode v4 | safe_cost={self._safe_cost_max} '
-            f'min_clear={self._min_clear_m}m')
+            f'LaneBevCarrotNode v5 | safe_cost={self._safe_cost_max} '
+            f'min_clear={self._min_clear_m}m | '
+            f'fallback_dists={self._fallback_dists} '
+            f'straight_ahead={self._straight_dist}m')
 
     # ── callbacks ──────────────────────────────────────────────────────
 
     def _goal_cb(self, msg):
-        self._final_goal = msg; 
+        self._final_goal = msg
         self._streak = 0
         self._carrot_locked = False
         self._locked_carrot = None
@@ -202,14 +225,14 @@ class LaneBevCarrotNode(Node):
         for deg in (0, 90, 180, 270, 45, 135, 225, 315):
             a = math.radians(deg)
             check_pts.append((wx + self._safety_r * math.cos(a),
-                            wy + self._safety_r * math.sin(a)))
+                              wy + self._safety_r * math.sin(a)))
         for px, py in check_pts:
             c = self._road_cost(px, py)
             if c != -1 and c >= self._safe_cost_max:
                 return False
         if self._scan_pts_map is not None and len(self._scan_pts_map) > 0:
             dists = np.hypot(self._scan_pts_map[:, 0] - wx,
-                            self._scan_pts_map[:, 1] - wy)
+                             self._scan_pts_map[:, 1] - wy)
             if np.any(dists < self._min_clear_m):
                 return False
         return True
@@ -251,12 +274,12 @@ class LaneBevCarrotNode(Node):
         if not (self._min_proj <= math.hypot(wx-cam_pos[0],wy-cam_pos[1]) <= self._max_proj):
             return None
         return wx, wy
-    
+
     def _lateral_clearance(self, wx, wy) -> float:
-        """Returns min distance (in metres) to nearest lethal cell, capped at 2.0m."""
+        """Returns min distance (metres) to nearest lethal cell, capped at 2.0m."""
         best = 2.0
         step = 0.1
-        for r in np.arange(step, 2.0, step):
+        for r in np.arange(step, best, step):
             for deg in (0, 45, 90, 135, 180, 225, 270, 315):
                 a = math.radians(deg)
                 c = self._road_cost(wx + r*math.cos(a), wy + r*math.sin(a))
@@ -265,16 +288,34 @@ class LaneBevCarrotNode(Node):
                     break
         return best
 
-    def _publish_stop(self):
-        msg = PoseStamped()
-        msg.header.stamp    = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'map'
-        msg.pose.position.x = self._robot_x
-        msg.pose.position.y = self._robot_y
-        msg.pose.orientation.z = math.sin(self._robot_yaw/2)
-        msg.pose.orientation.w = math.cos(self._robot_yaw/2)
-        self._pub.publish(msg)
-        self.get_logger().warn(f'STOP — no safe carrot for {self._streak} ticks')
+    # ── fallback carrot helpers ────────────────────────────────────────
+
+    def _fallback_carrot(self, rx_map: float, ry_map: float, fwd: np.ndarray, map_yaw: float):
+        """
+        Sweep a grid of MAP-FRAME points ahead with lateral offsets.
+        rx_map, ry_map: robot position in MAP frame (from cam_pos projected to z=0,
+                        or base_link TF — NOT self._robot_x/y which is odom-frame).
+        """
+        lat_x = -math.sin(map_yaw)
+        lat_y =  math.cos(map_yaw)
+
+        for dist in self._fallback_dists:
+            for lateral in self._fallback_laterals:
+                cx = rx_map + dist * fwd[0] + lateral * lat_x
+                cy = ry_map + dist * fwd[1] + lateral * lat_y
+                if self._is_safe(cx, cy):
+                    self.get_logger().info(
+                        f'[fallback] carrot ({cx:.2f},{cy:.2f}) '
+                        f'dist={dist:.2f}m lat={lateral:+.2f}m')
+                    return (cx, cy)
+        return None
+
+    def _straight_ahead_carrot(self, rx_map: float, ry_map: float, map_yaw: float) -> tuple:
+        """Emergency: unconditionally place carrot straight ahead in MAP frame."""
+        cx = rx_map + self._straight_dist * math.cos(map_yaw)
+        cy = ry_map + self._straight_dist * math.sin(map_yaw)
+        self.get_logger().warn(f'[straight-ahead] emergency carrot ({cx:.2f},{cy:.2f})')
+        return (cx, cy)
 
     # ── main tick ──────────────────────────────────────────────────────
 
@@ -297,8 +338,24 @@ class LaneBevCarrotNode(Node):
         t       = cam_tf.transform.translation
         cam_pos = np.array([t.x, t.y, t.z])
         R_cam   = _qrot(cam_tf.transform.rotation)
-        fwd     = np.array([math.cos(self._robot_yaw), math.sin(self._robot_yaw)])
 
+        # Robot pose in MAP frame — needed for fwd direction and fallback position.
+        # self._robot_yaw is odom-frame; SLAM can rotate map vs odom so we MUST
+        # use map->base_link TF for both position and heading.
+        try:
+            base_tf = self._tf_buf.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.05))
+        except tf2_ros.TransformException:
+            return
+        bt = base_tf.transform.translation
+        rx_map, ry_map = bt.x, bt.y
+        bq = base_tf.transform.rotation
+        _, _, map_yaw = tf_transformations.euler_from_quaternion(
+            [bq.x, bq.y, bq.z, bq.w])
+        fwd = np.array([math.cos(map_yaw), math.sin(map_yaw)])
+
+        # ── Locked carrot (near-goal persistence) ──────────────────────
         if self._carrot_locked and self._locked_carrot is not None:
             cx, cy = self._locked_carrot
             dp_from_cam = np.array([cx - cam_pos[0], cy - cam_pos[1]])
@@ -307,7 +364,7 @@ class LaneBevCarrotNode(Node):
                 self._carrot_locked = False
                 self._locked_carrot = None
             else:
-                yaw = math.atan2(cy - self._robot_y, cx - self._robot_x)
+                yaw = math.atan2(cy - ry_map, cx - rx_map)
                 msg = PoseStamped()
                 msg.header.stamp    = self.get_clock().now().to_msg()
                 msg.header.frame_id = 'map'
@@ -318,6 +375,7 @@ class LaneBevCarrotNode(Node):
                 self._pub.publish(msg)
                 return
 
+        # ── BEV lane fit ───────────────────────────────────────────────
         bev   = cv2.warpPerspective(self._last_img, self._M, (self._bev_w, self._bev_h))
         fresh = self._road_fit(bev)
         if fresh is not None:
@@ -333,7 +391,7 @@ class LaneBevCarrotNode(Node):
             if age > self._fit_cache_sec or drift > 0.3:
                 fit = None
 
-        carrot   = None
+        carrot     = None
         best_score = float('inf')
 
         if fit is not None:
@@ -341,7 +399,7 @@ class LaneBevCarrotNode(Node):
                 u  = float(np.clip(fit[0]*v**2 + fit[1]*v + fit[2], 0, self._bev_w-1))
                 pt = self._bev_to_ground(u, v, cam_pos, R_cam)
                 if pt is None: continue
-                dp          = np.array([pt[0]-self._robot_x, pt[1]-self._robot_y])
+                dp          = np.array([pt[0]-rx_map, pt[1]-ry_map])
                 dist_to_pt  = math.hypot(*dp)
                 dp_from_cam = np.array([pt[0]-cam_pos[0], pt[1]-cam_pos[1]])
                 if np.dot(fwd, dp_from_cam) <= 0:     continue
@@ -353,22 +411,30 @@ class LaneBevCarrotNode(Node):
                 if score < best_score:
                     best_score = score; carrot = pt
 
+        # ── Fallback chain when BEV yields nothing ─────────────────────
         if carrot is None:
             self._streak += 1
-            self.get_logger().warn(f'No safe carrot (streak={self._streak})',
-                                   throttle_duration_sec=1.0)
-            if self._streak >= self._stop_max:
-                self._publish_stop()
-            return
+            self.get_logger().warn(
+                f'No BEV carrot (streak={self._streak}) — trying lateral sweep',
+                throttle_duration_sec=1.0)
 
+            # Fallback 1: lateral grid search in map frame
+            carrot = self._fallback_carrot(rx_map, ry_map, fwd, map_yaw)
+
+            # Fallback 2: guaranteed straight-ahead crawl
+            if carrot is None:
+                carrot = self._straight_ahead_carrot(rx_map, ry_map, map_yaw)
+        else:
+            self._streak = 0
+
+        # ── Publish carrot ─────────────────────────────────────────────
         if math.hypot(carrot[0]-gx, carrot[1]-gy) <= self._goal_tol:
             self._carrot_locked = True
             self._locked_carrot = carrot
             self.get_logger().info(f'Carrot locked at ({carrot[0]:.2f}, {carrot[1]:.2f})')
 
-        self._streak = 0
-        dx  = carrot[0] - self._robot_x
-        dy  = carrot[1] - self._robot_y
+        dx  = carrot[0] - rx_map
+        dy  = carrot[1] - ry_map
         yaw = math.atan2(dy, dx)
         msg = PoseStamped()
         msg.header.stamp    = self.get_clock().now().to_msg()

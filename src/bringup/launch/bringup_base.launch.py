@@ -111,7 +111,7 @@ def generate_launch_description():
             'fit_cache_sec':         1.0,
             'no_carrot_stop_streak': 3,
             'safe_cost_max': 50,
-            'safety_radius':         0.30,  # NEW — footprint half-width + margin
+            'safety_radius':         0.6,  # NEW — footprint half-width + margin
             'max_carrot_dist_m': 6.0,
         }]
     )
