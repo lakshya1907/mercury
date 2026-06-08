@@ -52,6 +52,7 @@ class LaneBevCarrotNode(Node):
         self.declare_parameter('safe_cost_max',           50)
         self.declare_parameter('min_clear_m',             0.6)
         self.declare_parameter('safety_radius', 0.30)
+        self.declare_parameter('max_carrot_dist_m', 4.0)
 
 
         p = lambda n: self.get_parameter(n).value
@@ -69,6 +70,8 @@ class LaneBevCarrotNode(Node):
         self._safe_cost_max   = int(p('safe_cost_max'))
         self._min_clear_m     = float(p('min_clear_m'))
         self._safety_r        = float(p('safety_radius'))   # ← add here
+        self._max_carrot_dist = float(p('max_carrot_dist_m'))
+        
 
         self._fx = (img_w/2.0)/math.tan(hfov/2.0)
         self._cx = img_w/2.0
@@ -80,6 +83,8 @@ class LaneBevCarrotNode(Node):
         road = _load('road_config.json')
         sw   = _load('sliding_window_config.json')
 
+        
+
         src = np.float32(bev['src_points'])
         dst = np.float32(bev['dst_points'])
         self._M     = cv2.getPerspectiveTransform(src, dst)
@@ -90,6 +95,11 @@ class LaneBevCarrotNode(Node):
         self._road_v_max = int(road['v_max'])
         self._road_s_max = int(road.get('s_max',255))
         self._win_h = max(1, int(sw['window_height']))
+
+        self._last_fit_robot = (0.0, 0.0)
+
+        self._carrot_locked  = False
+        self._locked_carrot  = None  # (wx, wy)
 
         # state
         self._final_goal      = None
@@ -133,7 +143,10 @@ class LaneBevCarrotNode(Node):
     # ── callbacks ──────────────────────────────────────────────────────
 
     def _goal_cb(self, msg):
-        self._final_goal = msg; self._streak = 0
+        self._final_goal = msg; 
+        self._streak = 0
+        self._carrot_locked = False
+        self._locked_carrot = None
 
     def _odom_cb(self, msg):
         self._robot_x = msg.pose.pose.position.x
@@ -238,6 +251,19 @@ class LaneBevCarrotNode(Node):
         if not (self._min_proj <= math.hypot(wx-cam_pos[0],wy-cam_pos[1]) <= self._max_proj):
             return None
         return wx, wy
+    
+    def _lateral_clearance(self, wx, wy) -> float:
+        """Returns min distance (in metres) to nearest lethal cell, capped at 2.0m."""
+        best = 2.0
+        step = 0.1
+        for r in np.arange(step, 2.0, step):
+            for deg in (0, 45, 90, 135, 180, 225, 270, 315):
+                a = math.radians(deg)
+                c = self._road_cost(wx + r*math.cos(a), wy + r*math.sin(a))
+                if c != -1 and c >= self._safe_cost_max:
+                    best = min(best, r)
+                    break
+        return best
 
     def _publish_stop(self):
         msg = PoseStamped()
@@ -263,40 +289,69 @@ class LaneBevCarrotNode(Node):
 
         try:
             cam_tf = self._tf_buf.lookup_transform(
-                'map','camera_link', rclpy.time.Time(),
+                'map', 'camera_link', rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.05))
         except tf2_ros.TransformException:
             return
 
-        t = cam_tf.transform.translation
-        cam_pos = np.array([t.x,t.y,t.z])
+        t       = cam_tf.transform.translation
+        cam_pos = np.array([t.x, t.y, t.z])
         R_cam   = _qrot(cam_tf.transform.rotation)
+        fwd     = np.array([math.cos(self._robot_yaw), math.sin(self._robot_yaw)])
 
-        bev = cv2.warpPerspective(self._last_img, self._M, (self._bev_w,self._bev_h))
+        if self._carrot_locked and self._locked_carrot is not None:
+            cx, cy = self._locked_carrot
+            dp_from_cam = np.array([cx - cam_pos[0], cy - cam_pos[1]])
+            if np.dot(fwd, dp_from_cam) <= 0 or not self._is_safe(cx, cy):
+                self.get_logger().info('Locked carrot invalidated — recomputing')
+                self._carrot_locked = False
+                self._locked_carrot = None
+            else:
+                yaw = math.atan2(cy - self._robot_y, cx - self._robot_x)
+                msg = PoseStamped()
+                msg.header.stamp    = self.get_clock().now().to_msg()
+                msg.header.frame_id = 'map'
+                msg.pose.position.x = cx
+                msg.pose.position.y = cy
+                msg.pose.orientation.z = math.sin(yaw / 2)
+                msg.pose.orientation.w = math.cos(yaw / 2)
+                self._pub.publish(msg)
+                return
+
+        bev   = cv2.warpPerspective(self._last_img, self._M, (self._bev_w, self._bev_h))
         fresh = self._road_fit(bev)
         if fresh is not None:
-            self._last_fit = fresh
+            self._last_fit       = fresh
             self._last_fit_stamp = self.get_clock().now()
+            self._last_fit_robot = (self._robot_x, self._robot_y)
+
         fit = self._last_fit
         if fit is not None and self._last_fit_stamp is not None:
-            age = (self.get_clock().now()-self._last_fit_stamp).nanoseconds/1e9
-            if age > self._fit_cache_sec:
+            age   = (self.get_clock().now() - self._last_fit_stamp).nanoseconds / 1e9
+            drift = math.hypot(self._robot_x - self._last_fit_robot[0],
+                               self._robot_y - self._last_fit_robot[1])
+            if age > self._fit_cache_sec or drift > 0.3:
                 fit = None
 
-        carrot = None; best_err = float('inf')
-        fwd = np.array([math.cos(self._robot_yaw), math.sin(self._robot_yaw)])
+        carrot   = None
+        best_score = float('inf')
 
         if fit is not None:
             for v in np.linspace(self._bev_h-1, 0, self._n_samples):
-                u = float(np.clip(fit[0]*v**2+fit[1]*v+fit[2], 0, self._bev_w-1))
+                u  = float(np.clip(fit[0]*v**2 + fit[1]*v + fit[2], 0, self._bev_w-1))
                 pt = self._bev_to_ground(u, v, cam_pos, R_cam)
                 if pt is None: continue
-                dp = np.array([pt[0]-self._robot_x, pt[1]-self._robot_y])
-                if np.dot(fwd, dp) < 0: continue
-                if not self._is_safe(pt[0], pt[1]): continue   # ← both checks
-                err = abs(math.hypot(*dp)-self._carrot_dist)
-                if err < best_err:
-                    best_err = err; carrot = pt
+                dp          = np.array([pt[0]-self._robot_x, pt[1]-self._robot_y])
+                dist_to_pt  = math.hypot(*dp)
+                dp_from_cam = np.array([pt[0]-cam_pos[0], pt[1]-cam_pos[1]])
+                if np.dot(fwd, dp_from_cam) <= 0:     continue
+                if dist_to_pt < self._min_proj:        continue
+                if dist_to_pt > self._max_carrot_dist: continue
+                if not self._is_safe(pt[0], pt[1]):    continue
+                clearance = self._lateral_clearance(pt[0], pt[1])
+                score = abs(dist_to_pt - self._carrot_dist) - 0.5 * clearance
+                if score < best_score:
+                    best_score = score; carrot = pt
 
         if carrot is None:
             self._streak += 1
@@ -306,9 +361,15 @@ class LaneBevCarrotNode(Node):
                 self._publish_stop()
             return
 
+        if math.hypot(carrot[0]-gx, carrot[1]-gy) <= self._goal_tol:
+            self._carrot_locked = True
+            self._locked_carrot = carrot
+            self.get_logger().info(f'Carrot locked at ({carrot[0]:.2f}, {carrot[1]:.2f})')
+
         self._streak = 0
-        dx = carrot[0]-self._robot_x; dy = carrot[1]-self._robot_y
-        yaw = math.atan2(dy,dx)
+        dx  = carrot[0] - self._robot_x
+        dy  = carrot[1] - self._robot_y
+        yaw = math.atan2(dy, dx)
         msg = PoseStamped()
         msg.header.stamp    = self.get_clock().now().to_msg()
         msg.header.frame_id = 'map'

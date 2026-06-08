@@ -99,7 +99,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time':          True,
-            'carrot_dist_m':         2.0,
+            'carrot_dist_m':         4.8,
             'goal_tolerance':        0.8,
             'publish_rate':          2.0,
             'camera_hfov':           1.047,
@@ -112,6 +112,7 @@ def generate_launch_description():
             'no_carrot_stop_streak': 3,
             'safe_cost_max': 50,
             'safety_radius':         0.30,  # NEW — footprint half-width + margin
+            'max_carrot_dist_m': 6.0,
         }]
     )
 
