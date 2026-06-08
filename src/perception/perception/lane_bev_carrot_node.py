@@ -129,6 +129,9 @@ class LaneBevCarrotNode(Node):
         self._last_fit        = None
         self._last_fit_stamp  = None
         self._streak          = 0
+        # Finish-line gate: unit vector (robot→goal at goal-set time), map frame.
+        # Computed lazily on first tick after a new goal arrives.
+        self._approach_dir: tuple | None = None   # (dx, dy) unit vec
 
         # road costmap
         self._road_grid = None
@@ -166,10 +169,11 @@ class LaneBevCarrotNode(Node):
     # ── callbacks ──────────────────────────────────────────────────────
 
     def _goal_cb(self, msg):
-        self._final_goal = msg
-        self._streak = 0
+        self._final_goal    = msg
+        self._streak        = 0
         self._carrot_locked = False
         self._locked_carrot = None
+        self._approach_dir  = None   # recomputed on first tick
 
     def _odom_cb(self, msg):
         self._robot_x = msg.pose.pose.position.x
@@ -355,15 +359,25 @@ class LaneBevCarrotNode(Node):
             [bq.x, bq.y, bq.z, bq.w])
         fwd = np.array([math.cos(map_yaw), math.sin(map_yaw)])
 
+        # ── Finish-line approach direction (computed once per goal) ─────
+        if self._approach_dir is None:
+            dx = gx - rx_map; dy = gy - ry_map
+            d  = math.hypot(dx, dy)
+            if d > 0.01:
+                self._approach_dir = (dx / d, dy / d)
+
         # ── Locked carrot (near-goal persistence) ──────────────────────
         if self._carrot_locked and self._locked_carrot is not None:
             cx, cy = self._locked_carrot
-            dp_from_cam = np.array([cx - cam_pos[0], cy - cam_pos[1]])
-            if np.dot(fwd, dp_from_cam) <= 0 or not self._is_safe(cx, cy):
+            # If locked AT the goal, never invalidate — finish line was crossed
+            if cx == gx and cy == gy:
+                pass  # fall through to publish below
+            elif np.dot(fwd, np.array([cx - cam_pos[0], cy - cam_pos[1]])) <= 0 \
+                    or not self._is_safe(cx, cy):
                 self.get_logger().info('Locked carrot invalidated — recomputing')
                 self._carrot_locked = False
                 self._locked_carrot = None
-            else:
+            if self._carrot_locked:  # still locked
                 yaw = math.atan2(cy - ry_map, cx - rx_map)
                 msg = PoseStamped()
                 msg.header.stamp    = self.get_clock().now().to_msg()
@@ -427,12 +441,26 @@ class LaneBevCarrotNode(Node):
         else:
             self._streak = 0
 
-        # ── Publish carrot ─────────────────────────────────────────────
-        if math.hypot(carrot[0]-gx, carrot[1]-gy) <= self._goal_tol:
-            self._carrot_locked = True
-            self._locked_carrot = carrot
-            self.get_logger().info(f'Carrot locked at ({carrot[0]:.2f}, {carrot[1]:.2f})')
+        # ── Finish-line gate: lock carrot at goal if carrot crossed the
+        #    perpendicular plane at the goal (dot-product gate, same logic
+        #    as goal_decomposer gate planes).
+        #    Also triggers on the old distance-based goal_tol check.
+        if self._approach_dir is not None:
+            adx, ady = self._approach_dir
+            # dot( carrot - goal , approach_dir ) >= 0 → carrot is past goal
+            past_gate = ((carrot[0] - gx) * adx + (carrot[1] - gy) * ady) >= 0.0
+        else:
+            past_gate = False
 
+        if past_gate or math.hypot(carrot[0]-gx, carrot[1]-gy) <= self._goal_tol:
+            # Snap carrot to exact goal and lock permanently
+            carrot = (gx, gy)
+            self._carrot_locked  = True
+            self._locked_carrot  = carrot
+            self.get_logger().info(
+                f'Finish line crossed — carrot locked at goal ({gx:.2f},{gy:.2f})')
+
+        # ── Publish carrot ─────────────────────────────────────────────
         dx  = carrot[0] - rx_map
         dy  = carrot[1] - ry_map
         yaw = math.atan2(dy, dx)
