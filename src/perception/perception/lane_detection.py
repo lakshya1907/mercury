@@ -206,6 +206,7 @@ class LaneDetectionNode(Node):
         self.error_pub   = self.create_publisher(Float32, '/lane_center_error', 10)
         self.visible_pub = self.create_publisher(Bool,    '/lane_visible',      10)
         self.debug_pub   = self.create_publisher(Image,   '/lane_debug/image',  sensor_qos)
+        self.both_pub = self.create_publisher(Bool, '/lane/both_visible', 10)
 
         self.get_logger().info(
             f'LaneDetectionNode v5 | '
@@ -501,6 +502,7 @@ class LaneDetectionNode(Node):
 
         self.error_pub.publish(Float32(data=float(smooth_err)))
         self.visible_pub.publish(Bool(data=visible))
+        self.both_pub.publish(Bool(data=(mode == 'both')))
 
         # ── Debug overlay ─────────────────────────────────────────────────
         debug  = frame.copy()

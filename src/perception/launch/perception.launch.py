@@ -95,21 +95,21 @@ def generate_launch_description():
         }]
     )
 
-    lane_assist = Node(
-        package='perception',
-        executable='lane_assist_node',
-        name='lane_assist_node',
-        output='screen',
-        parameters=[{
-            'use_sim_time':     True,
-            'Kp':               0.18,
-            'Kd':               0.08,
-            'max_correction':   0.3,
-            'image_half_width': 320.0,
-            'dead_band_px':     25.0,
-            'timeout_sec':      0.5,
-        }]
-    )
+    # lane_assist = Node(
+    #     package='perception',
+    #     executable='lane_assist_node',
+    #     name='lane_assist_node',
+    #     output='screen',
+    #     parameters=[{
+    #         'use_sim_time':     True,
+    #         'Kp':               0.18,
+    #         'Kd':               0.08,
+    #         'max_correction':   0.3,
+    #         'image_half_width': 320.0,
+    #         'dead_band_px':     25.0,
+    #         'timeout_sec':      0.5,
+    #     }]
+    # )
 
     pothole_costmap = Node(
         package='perception',
@@ -154,6 +154,6 @@ def generate_launch_description():
         use_sim_time_arg,
         lane_detection_node,
         lane_costmap,
-        lane_assist,
+        # lane_assist,
         pothole_costmap, 
     ])

@@ -1,0 +1,12 @@
+{
+    "num_windows":    13,
+    "margin":         43,
+    "window_height":  5,
+    "min_pixels":     0,
+    "max_shift":      108,
+    "min_contour_area": 0,
+    "point_radius":   2,
+    "window_thickness": 0,
+    "poly_degree":    2,
+    "lookahead":      76
+}

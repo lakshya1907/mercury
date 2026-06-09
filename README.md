@@ -33,7 +33,6 @@ colcon build
 
 # Source workspace
 source install/setup.bash
-
 ```
 
 ---
@@ -51,7 +50,6 @@ source ~/mercury_venv/bin/activate
 
 # Install Python dependencies
 pip install -r requirements.txt
-
 ```
 
 Add activation to your `~/.bashrc` so it persists across terminals:
@@ -59,7 +57,6 @@ Add activation to your `~/.bashrc` so it persists across terminals:
 ```bash
 echo "source ~/mercury_venv/bin/activate" >> ~/.bashrc
 source ~/.bashrc
-
 ```
 
 > **Note:** Always activate the venv before running any face task or perception nodes. The `--system-site-packages` flag ensures ROS 2 Python packages (`rclpy`, etc.) remain accessible inside the venv.
@@ -85,14 +82,12 @@ export GZ_SIM_SYSTEM_PLUGIN_PATH=/opt/ros/jazzy/lib
 
 # Python venv
 source ~/mercury_venv/bin/activate
-
 ```
 
 Apply:
 
 ```bash
 source ~/.bashrc
-
 ```
 
 ---
@@ -102,7 +97,6 @@ source ~/.bashrc
 ```bash
 sudo docker compose build
 sudo docker compose run ros
-
 ```
 
 ---
@@ -114,7 +108,6 @@ cd mercury
 source install/setup.bash
 colcon build
 ros2 launch bringup bringup_sim.launch.py
-
 ```
 
 ---
@@ -138,9 +131,7 @@ A non-intrusive ROS 2 monitoring and observability package for the Mercury robot
 To build and launch the watchdog monitoring system:
 
 ```bash
-
 ros2 launch watchdog_monitor monitoring_all.launch.py
-
 ```
 
 ### Dashboard
@@ -148,9 +139,7 @@ ros2 launch watchdog_monitor monitoring_all.launch.py
 To spin up the live terminal dashboard:
 
 ```bash
-
 ros2 launch watchdog_monitor dashboard.launch.py
-
 ```
 
 ---
@@ -167,7 +156,6 @@ waypoint_detector_node:
     waypoints: [-19.0, -47.0, -19.0, -43.0, -21.0, -43.0]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
     arrival_radius: 0.5
-
 ```
 
 > **Note:** `spawn_x` and `spawn_y` must match the `-x` / `-y` values passed to `ros_gz_sim create` in the launch file. Waypoints are specified in world coordinates — the node offsets odometry by the spawn position automatically.
@@ -182,14 +170,12 @@ waypoint_detector_node:
 
 ```bash
 ros2 launch watchdog_monitor monitoring_all.launch.py
-
 ```
 
 **Terminal 2 — launch face detection:**
 
 ```bash
 ros2 launch face_task face_task.launch.py target_image:=/home/soap/probes/mercury/photo1.jpg
-
 ```
 
 *Replace the `target_image` path with the absolute path to your target face image.*
@@ -204,18 +190,33 @@ ros2 launch face_task face_task.launch.py target_image:=/home/soap/probes/mercur
 | `/system_alerts` | `std_msgs/String` (JSON) | `watchdog_node` |
 | `/waypoint_reached` | `std_msgs/String` (JSON) | `waypoint_detector_node` |
 | `/waypoint_status` | `std_msgs/String` (JSON) | `waypoint_detector_node` |
+| `/final_goal` | `geometry_msgs/PoseStamped` | External / operator |
 
 ---
 
 ## Sending Navigation Goal
 
-```bash
-ros2 topic pub --once /goal_decomposer/goal geometry_msgs/msg/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: 26.0, y: -7.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}"
+Publish a goal directly to the navigation stack:
 
+```bash
+ros2 topic pub --once /final_goal geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: map}, pose: {position: {x: <X>, y: <Y>}, orientation: {w: 1.0}}}"
 ```
 
-*Replace `(p, q)` with the target world coordinates.*
+Replace `<X>` and `<Y>` with target world coordinates (in metres, `map` frame).
+
+**Example — drive to (24.5, −22.4):**
+
+```bash
+ros2 topic pub --once /final_goal geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: map}, pose: {position: {x: 24.5, y: -22.4}, orientation: {w: 1.0}}}"
+```
+
+> **`orientation: {w: 1.0}`** sets a neutral (zero-yaw) heading.  
+> The planner determines the actual approach angle automatically.  
+> To command a specific heading, use the quaternion formula:  
+> `w = cos(θ/2)`, `z = sin(θ/2)` where θ is yaw in radians  
+> (e.g. 90° → `z: 0.707, w: 0.707`).
 
 ---
 
@@ -225,7 +226,6 @@ To manually move the turret, publish commands to the controller:
 
 ```bash
 ros2 topic pub /turret_controller/commands std_msgs/msg/Float64MultiArray "{data: [1.0, 0.0]}"
-
 ```
 
 *The array represents joint commands (e.g., yaw, pitch). Adjust values based on your turret configuration.*
@@ -237,15 +237,13 @@ ros2 topic pub /turret_controller/commands std_msgs/msg/Float64MultiArray "{data
 ```bash
 ros2 topic pub --once /waypoint_reached std_msgs/msg/String \
   '{"data": "{\"event\": \"waypoint_reached\", \"waypoint\": {\"name\": \"WP-2\", \"index\": 2}}"}'
-
 ```
 
---- 
+---
 
-### Clean Build
+## Clean Build
 
 ```bash
 rm -rf build/ install/ log/
 colcon build
-
 ```

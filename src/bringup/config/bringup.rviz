@@ -281,6 +281,13 @@ Visualization Manager:
         Value: /perception/road_costmap_updates
       Use Timestamp: false
       Value: true
+    - Class: rviz_default_plugins/Pose
+      Name: CarrotGoal
+      Topic:
+        Value: /goal_pose
+      Color: 255; 0; 0
+      Shaft Length: 0.5
+      Enabled: true
     - Alpha: 0.699999988079071
       Binary representation: false
       Binary threshold: 100
@@ -348,7 +355,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /goal_pose
+        Value: /final_goal    # was /goal_pose
     - Class: rviz_default_plugins/PublishPoint
       Single click: true
       Topic:

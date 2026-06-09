@@ -11,7 +11,6 @@ def generate_launch_description():
     params = os.path.join(pkg_planning, 'config', 'nav2_params.yaml')
     global_costmap = os.path.join(pkg_planning, 'config', 'global_costmap.yaml')
     local_costmap = os.path.join(pkg_planning, 'config', 'local_costmap.yaml')
-
     planner = Node(
         package='nav2_planner',
         executable='planner_server',

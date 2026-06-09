@@ -22,7 +22,7 @@ class TwistToStamped(Node):
 
         self.sub = self.create_subscription(
             Twist,
-            '/cmd_vel_nav',   # ← was /cmd_vel
+            '/cmd_vel',   # ← was /cmd_vel
             self.callback,
             10
         )
